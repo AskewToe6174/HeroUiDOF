@@ -9,5 +9,7 @@ export async function GetEjemploPutoIvan() {
   await ensureDB();
   getDB(); 
   const rows = await DOF_Acuerdos.findAll({ order: [['id', 'ASC']] });
-  return NextResponse.json(rows);
+  return rows.map(r => r.toJSON());
 }
+ 
+
