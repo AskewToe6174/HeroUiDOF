@@ -5,9 +5,9 @@ import { DOF_Acuerdos } from '@/lib/server/models/DOF_Acuerdos';
 
 export const runtime = 'nodejs';
 
-export async function GET() {
+export async function GetEjemploPutoIvan() {
   await ensureDB();
-  getDB(); // asegura initModels
+  getDB(); 
   const rows = await DOF_Acuerdos.findAll({ order: [['id', 'ASC']] });
   return NextResponse.json(rows);
 }

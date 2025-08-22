@@ -1,6 +1,6 @@
 // lib/server/ensureDB.ts
 import 'server-only';
-import { sequelize } from '../server/db';
+import { sequelize } from './db';
 import { initModels } from './models';
 
 let initialized = false;
