@@ -7,7 +7,9 @@ import { QueryTypes } from "sequelize";
 import { DOF_Cliente } from '@/lib/server/models/DOF_Cliente';
 import { DOF_RegistroPunto18 } from '@/lib/server/models/DOF_RegistroPunto18';
 
-
+/* ============================================
+ *  SCHEMA y tipos
+ * ============================================ */
 const RegistroSchema = z.object({
   Fecha: z.preprocess((v) => (v instanceof Date ? v : new Date(String(v))), z.date()),
   IdCliente: z.number().int().positive(),
@@ -26,53 +28,161 @@ export type ImportXlsxResult = {
   sample: any[];
 };
 
-/** Ajusta el mapeo de encabezados a tus columnas reales */
+/* ============================================
+ *  PARSER ROBUSTO para plantilla "ESTACIÓN N"
+ *  (3 columnas de Volumen por estación, con merges)
+ * ============================================ */
+
+// Config plantilla
+const COLS_PER_STATION = 3;                 // 3 columnas por estación: Magna, Premium, Diésel
+// IDs REALES de tu catálogo para (Magna, Premium, Diésel) en ese orden:
+const FUEL_ORDER: number[] = [1, 2, 3];     // <-- ajusta si difiere en tu BD
+// Si el "N" en "ESTACIÓN N" NO es el id real, mapea aquí:
+const STATION_MAP: Record<number, number> = {
+  // 1: 101, 2: 205, ...
+};
+
+// Helpers
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+function parseNumber2(v: any): number | null {
+  if (v === null || v === undefined || v === '' || v === '-' || v === '—') return null;
+  if (typeof v === 'number') return round2(v);
+  let s = String(v).trim().replace(/[^\d.,-]/g, '');
+  if (s.includes(',') && !s.includes('.')) { s = s.replace(/\./g, '').replace(',', '.'); }
+  else { s = s.replace(/,/g, ''); }
+  const n = Number(s);
+  return Number.isNaN(n) ? null : round2(n);
+}
+
+function toYMD(val: any): string | null {
+  if (val instanceof Date) {
+    const y = val.getFullYear(), m = String(val.getMonth() + 1).padStart(2, '0'), d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof val === 'string') {
+    const m = val.trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      let [, dd, mm, yy] = m;
+      yy = yy.length === 2 ? (Number(yy) > 50 ? `19${yy}` : `20${yy}`) : yy;
+      return `${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+    }
+  }
+  const d = new Date(val);
+  if (!isNaN(d as any)) {
+    const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), da = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${da}`;
+  }
+  return null;
+}
+
+/**
+ * Parser para plantilla con "ESTACIÓN N" y columnas "Volumen de ventas (Lts)".
+ * - Soporta celdas combinadas en la fila de estaciones.
+ * - Detecta bloques de 3 columnas por estación y asigna combustible por posición (FUEL_ORDER).
+ */
 function parseTemplateToRows(buffer: Buffer, idCliente: number): RegistroInput[] {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return [];
   const ws = wb.Sheets[sheetName];
-  const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: null });
 
-  const headerMap: Record<string, keyof RegistroInput> = {
-    fecha: 'Fecha',
-    idcliente: 'IdCliente',
-    id_estacion: 'idEstacion',
-    estacion: 'idEstacion',
-    id_tipocombustible: 'idTipoCombustible',
-    tipo_combustible: 'idTipoCombustible',
-    volumen_lts: 'VolumenVentasLts',
-    volumen: 'VolumenVentasLts',
-    precio: 'Precio',
-  };
+  // Leer como matriz para conservar posiciones
+  const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-  const norm = (s: any) =>
-    String(s ?? '')
-      .toLowerCase()
-      .replace(/\s+/g, '_')
-      .replace(/[^\w]/g, '');
+  // 1) Fila de encabezados (busca donde aparece "fecha" en la col 0)
+  const headerRowIdx = rows.findIndex(r => String(r?.[0] ?? '').toLowerCase().includes('fecha'));
+  if (headerRowIdx === -1) throw new Error('No se encontró fila "fecha/concepto".');
 
-  const out: RegistroInput[] = [];
-  for (const r of rows) {
-    const acc: Record<string, any> = { IdCliente: idCliente };
-    for (const [k, v] of Object.entries(r)) {
-      const key = headerMap[norm(k)];
-      if (!key) continue;
-      acc[key] = v;
+  // 2) Fila "ESTACIÓN N" (usualmente 1 o 2 arriba)
+  const candidateIdxs = [headerRowIdx - 2, headerRowIdx - 1].filter(i => i >= 0);
+  let estacionRowIdx = candidateIdxs.find(i => {
+    const joined = (rows[i] || []).map(c => String(c)).join(' ').toLowerCase();
+    return joined.includes('estacion') || joined.includes('estación') || joined.includes('est.');
+  });
+  if (estacionRowIdx == null) estacionRowIdx = Math.max(headerRowIdx - 1, 0);
+
+  const headerRow = rows[headerRowIdx] || [];
+  const estacionRowRaw = rows[estacionRowIdx] || [];
+
+  // 3) Expandir merges de la fila de estaciones (copiar valor en todo el rango)
+  const estacionRow = [...estacionRowRaw];
+  const merges: Array<any> = (ws as any)['!merges'] || [];
+  for (const m of merges) {
+    const { s, e } = m; // start/end { r, c }
+    if (s.r === estacionRowIdx && e.r === estacionRowIdx) {
+      const key = XLSX.utils.encode_cell({ r: s.r, c: s.c });
+      const val = (ws as any)[key]?.v ?? estacionRow[s.c] ?? '';
+      for (let c = s.c; c <= e.c; c++) estacionRow[c] = val;
+    }
+  }
+
+  // 4) Detectar columnas de "Volumen" y mapear a (estación, combustible)
+  const colDefs: Array<{ col: number; idEstacion: number; idTipoCombustible: number }> = [];
+  let currentStation: number | null = null;
+  let posWithinStation = 0; // 0: Magna, 1: Premium, 2: Diésel
+  let prevStationLabel: string | null = null;
+
+  for (let col = 1; col < headerRow.length; col++) {
+    const h = String(headerRow[col] || '').toLowerCase();
+    if (!h.includes('volumen')) continue; // sólo columnas "Volumen de ventas (Lts)"
+
+    const rawLabel = String(estacionRow[col] || '').trim();
+    if (rawLabel && rawLabel !== prevStationLabel) {
+      const match = rawLabel.match(/(?:est(?:aci[oó]n|\.)?|e)\s*(\d+)/i);
+      if (match) {
+        const estacionNum = Number(match[1]);
+        currentStation = STATION_MAP[estacionNum] ?? estacionNum;
+        posWithinStation = 0;
+        prevStationLabel = rawLabel;
+      }
     }
 
-    if (typeof acc.idEstacion === 'string') acc.idEstacion = Number(acc.idEstacion);
-    if (typeof acc.idTipoCombustible === 'string') acc.idTipoCombustible = Number(acc.idTipoCombustible);
-    if (typeof acc.VolumenVentasLts === 'string') acc.VolumenVentasLts = Number(acc.VolumenVentasLts);
-    if (typeof acc.Precio === 'string') acc.Precio = Number(acc.Precio);
-    if (acc.Fecha && !(acc.Fecha instanceof Date)) acc.Fecha = new Date(acc.Fecha);
+    if (currentStation == null) continue;
 
-    const parsed = RegistroSchema.safeParse(acc);
-    if (parsed.success) out.push(parsed.data);
+    const idTipoCombustible = FUEL_ORDER[posWithinStation] ?? null;
+    if (idTipoCombustible != null) {
+      colDefs.push({ col, idEstacion: currentStation, idTipoCombustible });
+    }
+
+    posWithinStation = (posWithinStation + 1) % COLS_PER_STATION;
   }
+
+  if (!colDefs.length) {
+    throw new Error('No se detectaron columnas de "Volumen de ventas (Lts)". Revisa encabezados/plantilla.');
+  }
+
+  // 5) Recorrer filas de datos y construir registros
+  const startDataRow = headerRowIdx + 1;
+  const out: RegistroInput[] = [];
+
+  for (let r = startDataRow; r < rows.length; r++) {
+    const ymd = toYMD(rows[r]?.[0]);
+    if (!ymd) continue;
+
+    for (const def of colDefs) {
+      const v = parseNumber2(rows[r]?.[def.col]);
+      if (v === null) continue;
+
+      const acc: any = {
+        Fecha: ymd, // se convertirá a Date por zod
+        IdCliente: idCliente,
+        idEstacion: def.idEstacion,
+        idTipoCombustible: def.idTipoCombustible,
+        VolumenVentasLts: v,
+      };
+
+      const parsed = RegistroSchema.safeParse(acc);
+      if (parsed.success) out.push(parsed.data);
+    }
+  }
+
   return out;
 }
 
+/* ============================================
+ *  IMPORTACIÓN desde XLSX (Server-side)
+ * ============================================ */
 export async function importRegistrosXlsx(opts: {
   buffer: Buffer;
   idCliente: number;
@@ -101,7 +211,7 @@ export async function importRegistrosXlsx(opts: {
     }
 
     const inserted = await DOF_RegistroPunto18.bulkCreate(registros as any[], {
-      // Habilita si definiste índice único (Fecha, IdCliente, idEstacion, idTipoCombustible)
+      // Si definiste índice único (Fecha, IdCliente, idEstacion, idTipoCombustible):
       // updateOnDuplicate: ['VolumenVentasLts', 'Precio', 'updatedAt'],
       transaction: t,
       validate: true,
@@ -119,10 +229,9 @@ export async function importRegistrosXlsx(opts: {
   }
 }
 
-/* =========================================================
- *  PARTE 2: REPORTE SEMANAL (raw SQL con ensureDB/getDB)
- * ========================================================= */
-
+/* ============================================
+ *  PARTE 2: REPORTE SEMANAL (raw SQL)
+ * ============================================ */
 export type ReporteSemanalParams = {
   mes?: number | null;
   ano?: number | null;
@@ -274,4 +383,3 @@ export async function getReporteSemanal(params: ReporteSemanalParams) {
 
   return rows as any[];
 }
-
