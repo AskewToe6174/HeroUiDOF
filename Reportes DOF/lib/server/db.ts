@@ -1,6 +1,7 @@
 // lib/server/db.ts
 import 'server-only';
 import { Sequelize } from 'sequelize';
+import 'mysql2';
 
 declare global {
   // eslint-disable-next-line no-var

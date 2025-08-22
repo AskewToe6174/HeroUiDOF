@@ -25,8 +25,11 @@
     "clsx": "2.1.1",
     "framer-motion": "11.18.2",
     "intl-messageformat": "10.7.16",
+    "mysql2": "^3.14.3",
     "next": "15.3.1",
     "next-themes": "0.4.6",
+    "pg": "^8.16.3",
+    "pg-hstore": "^2.3.4",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "sequelize": "^6.37.7"

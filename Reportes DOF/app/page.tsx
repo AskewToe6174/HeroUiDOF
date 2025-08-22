@@ -10,7 +10,7 @@ import { GetEjemploPutoIvan } from "./api/DOF/route";
 
 export default async function Home() {
   const data = await GetEjemploPutoIvan();
-  console.log(data)
+  console.log("hi puto",data)
   return (
     <section className="flex flex-col items-center justify-center gap-4 py-8 md:py-10">
       <div className="inline-block max-w-xl text-center justify-center">
