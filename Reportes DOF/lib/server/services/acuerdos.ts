@@ -7,3 +7,4 @@ export async function getAcuerdos() {
   const rows = await DOF_Acuerdos.findAll({ order: [["id", "ASC"]] });
   return rows.map(r => r.toJSON());
 }
+  

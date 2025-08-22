@@ -1,5 +1,127 @@
+// /lib/server/services/dof.ts
+import 'server-only';
+import { z } from 'zod';
+import * as XLSX from 'xlsx';
 import { ensureDB, getDB } from "@/lib/server/ensureDB";
 import { QueryTypes } from "sequelize";
+import { DOF_Cliente } from '@/lib/server/models/DOF_Cliente';
+import { DOF_RegistroPunto18 } from '@/lib/server/models/DOF_RegistroPunto18';
+
+
+const RegistroSchema = z.object({
+  Fecha: z.preprocess((v) => (v instanceof Date ? v : new Date(String(v))), z.date()),
+  IdCliente: z.number().int().positive(),
+  idEstacion: z.number().int().positive(),
+  idTipoCombustible: z.number().int().positive(),
+  VolumenVentasLts: z.number().nonnegative().default(0),
+  Precio: z.number().nonnegative().optional(),
+  createdAt: z.preprocess((v) => (v ? new Date(String(v)) : new Date()), z.date()).optional(),
+  updatedAt: z.preprocess((v) => (v ? new Date(String(v)) : new Date()), z.date()).optional(),
+});
+type RegistroInput = z.infer<typeof RegistroSchema> & Record<string, any>;
+
+export type ImportXlsxResult = {
+  dryRun: boolean;
+  count: number;
+  sample: any[];
+};
+
+/** Ajusta el mapeo de encabezados a tus columnas reales */
+function parseTemplateToRows(buffer: Buffer, idCliente: number): RegistroInput[] {
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) return [];
+  const ws = wb.Sheets[sheetName];
+  const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: null });
+
+  const headerMap: Record<string, keyof RegistroInput> = {
+    fecha: 'Fecha',
+    idcliente: 'IdCliente',
+    id_estacion: 'idEstacion',
+    estacion: 'idEstacion',
+    id_tipocombustible: 'idTipoCombustible',
+    tipo_combustible: 'idTipoCombustible',
+    volumen_lts: 'VolumenVentasLts',
+    volumen: 'VolumenVentasLts',
+    precio: 'Precio',
+  };
+
+  const norm = (s: any) =>
+    String(s ?? '')
+      .toLowerCase()
+      .replace(/\s+/g, '_')
+      .replace(/[^\w]/g, '');
+
+  const out: RegistroInput[] = [];
+  for (const r of rows) {
+    const acc: Record<string, any> = { IdCliente: idCliente };
+    for (const [k, v] of Object.entries(r)) {
+      const key = headerMap[norm(k)];
+      if (!key) continue;
+      acc[key] = v;
+    }
+
+    if (typeof acc.idEstacion === 'string') acc.idEstacion = Number(acc.idEstacion);
+    if (typeof acc.idTipoCombustible === 'string') acc.idTipoCombustible = Number(acc.idTipoCombustible);
+    if (typeof acc.VolumenVentasLts === 'string') acc.VolumenVentasLts = Number(acc.VolumenVentasLts);
+    if (typeof acc.Precio === 'string') acc.Precio = Number(acc.Precio);
+    if (acc.Fecha && !(acc.Fecha instanceof Date)) acc.Fecha = new Date(acc.Fecha);
+
+    const parsed = RegistroSchema.safeParse(acc);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+export async function importRegistrosXlsx(opts: {
+  buffer: Buffer;
+  idCliente: number;
+  dryRun?: boolean;
+}): Promise<ImportXlsxResult> {
+  const { buffer, idCliente, dryRun = false } = opts;
+  if (!idCliente || Number.isNaN(idCliente)) {
+    throw new Error('IdCliente es obligatorio y numérico.');
+  }
+
+  await ensureDB();
+  const db = getDB();
+  const t = await db.sequelize.transaction();
+  try {
+    const cliente = await DOF_Cliente.findByPk(idCliente, { transaction: t });
+    if (!cliente) throw new Error(`IdCliente ${idCliente} no existe.`);
+
+    const registros = parseTemplateToRows(buffer, idCliente);
+    if (!registros.length) {
+      throw new Error('El XLSX no generó registros (¿encabezados distintos o celdas vacías?).');
+    }
+
+    if (dryRun) {
+      await t.rollback();
+      return { dryRun: true, count: registros.length, sample: registros.slice(0, 15) };
+    }
+
+    const inserted = await DOF_RegistroPunto18.bulkCreate(registros as any[], {
+      // Habilita si definiste índice único (Fecha, IdCliente, idEstacion, idTipoCombustible)
+      // updateOnDuplicate: ['VolumenVentasLts', 'Precio', 'updatedAt'],
+      transaction: t,
+      validate: true,
+    });
+
+    await t.commit();
+    return {
+      dryRun: false,
+      count: inserted.length,
+      sample: inserted.slice(0, 15).map((r: any) => (typeof r.toJSON === 'function' ? r.toJSON() : r)),
+    };
+  } catch (e: any) {
+    await t.rollback();
+    throw new Error(e?.message ?? 'Error desconocido al importar XLSX');
+  }
+}
+
+/* =========================================================
+ *  PARTE 2: REPORTE SEMANAL (raw SQL con ensureDB/getDB)
+ * ========================================================= */
 
 export type ReporteSemanalParams = {
   mes?: number | null;
@@ -152,3 +274,4 @@ export async function getReporteSemanal(params: ReporteSemanalParams) {
 
   return rows as any[];
 }
+
