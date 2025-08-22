@@ -6,6 +6,6 @@ export default async function Home() {
   const semanal = await getReporteSemanal({ mes: 11, ano: 2024 });
 
   return (
-    <pre>{JSON.stringify({ acuerdos: acuerdos.length, semanal: semanal.length }, null, 2)}</pre>
+    <pre>{JSON.stringify({  semanal: semanal }, null, 2)}</pre>
   );
 }
