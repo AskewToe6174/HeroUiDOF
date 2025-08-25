@@ -6,7 +6,7 @@ import {
   importRegistrosXlsx,
   type ImportXlsxResult,
   createTipoCombustible,
-  createCliente,createEstacion,createAcuerdo
+  createCliente, createEstacion, createAcuerdo, createParametro
 } from '@/lib/server/services/dof';
 
 export type ImportState =
@@ -78,5 +78,15 @@ export async function crearAcuerdoAction(formData: FormData) {
 
   const created = await createAcuerdo({ NombreAcuerdo, FechaInicial, FechaFinal, Status });
   revalidatePath('/(dof)/registros'); // ajusta la ruta donde listes acuerdos
+  return created;
+}
+
+
+export async function crearParametroAction(formData: FormData) {
+  const Nombre = String(formData.get('Nombre') ?? '').trim();
+  const StatusStr = formData.get('Status');
+  const Status = StatusStr ? Number(StatusStr) : undefined;
+
+  const created = await createParametro({ Nombre, Status });
   return created;
 }

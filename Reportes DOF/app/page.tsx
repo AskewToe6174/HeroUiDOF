@@ -1,4 +1,4 @@
-import { getReporteSemanal,getAcuerdos,listTiposCombustible,listClientes,listEstaciones } from "@/lib/server/services/dof";
+import { getReporteSemanal, getAcuerdos, listTiposCombustible, listClientes, listEstaciones, listParametros } from "@/lib/server/services/dof";
 
 /**
 // Se pueden combinar los filtro
@@ -13,14 +13,15 @@ await getReporteSemanal({ idCliente: 123, idEstacion: 45 });
 
  */export default async function Home() {
   const acuerdos = await getAcuerdos();
-    const Clientes = await listClientes();
+  const Clientes = await listClientes();
   const tiposCombustible = await listTiposCombustible();
   const semanal = await getReporteSemanal({
     mes: 11,
     ano: 2024,
     idEstacion: 1,
   });
-    const Estaciones = await listEstaciones();
+  const Estaciones = await listEstaciones();
+  const Parametros = await listParametros();
 
 
   return (
@@ -48,7 +49,7 @@ await getReporteSemanal({ idCliente: 123, idEstacion: 45 });
 
         {/* Tipos de Combustible */}
         <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
-          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">⛽ Tipos de Combustible</h2>
+          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">🪫 Tipos de Combustible</h2>
           <pre className="overflow-x-auto text-sm text-zinc-800 dark:text-zinc-200">
             {JSON.stringify(tiposCombustible, null, 2)}
           </pre>
@@ -56,20 +57,27 @@ await getReporteSemanal({ idCliente: 123, idEstacion: 45 });
 
 
 
-                <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
+        <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
           <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">📘 Clientes</h2>
           <pre className="overflow-x-auto text-sm text-zinc-800 dark:text-zinc-200">
             {JSON.stringify(Clientes, null, 2)}
           </pre>
         </div>
 
-                <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
-          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">xx Estaciones</h2>
+        <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
+          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">⛽️ Estaciones</h2>
           <pre className="overflow-x-auto text-sm text-zinc-800 dark:text-zinc-200">
             {JSON.stringify(Estaciones, null, 2)}
           </pre>
         </div>
 
+
+        <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
+          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white"> 🎛️ Parametros</h2>
+          <pre className="overflow-x-auto text-sm text-zinc-800 dark:text-zinc-200">
+            {JSON.stringify(Parametros, null, 2)}
+          </pre>
+        </div>
 
       </div>
     </div>

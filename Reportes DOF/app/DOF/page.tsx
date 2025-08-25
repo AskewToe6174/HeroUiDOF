@@ -3,6 +3,8 @@ import FormCrearTipo from "@/components/FormTipoComb";
 import FormCrearCliente from "@/components/FormClientes";
 import FormCrearEstacion from "@/components/FormEstacion";
 import FormCrearAcuerdo from "@/components/form-acuerdo";
+import FormCrearParametro from "@/components/Form-parametro";
+
 export default function Page() {
   return (
     <main className="p-6 space-y-6">
@@ -16,6 +18,10 @@ export default function Page() {
       <FormCrearEstacion />
       <h1 className="text-xl font-semibold">Crear Acuerdo</h1>
       <FormCrearAcuerdo />
+      <h1 className="text-xl font-semibold">Crear Parametro</h1>
+      <FormCrearParametro />
+
+      
     </main>
   );
 }
