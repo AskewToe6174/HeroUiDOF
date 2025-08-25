@@ -9,6 +9,7 @@ import { DOF_RegistroPunto18 } from '@/lib/server/models/DOF_RegistroPunto18';
 import { DOF_Tipo_Combustible } from '@/lib/server/models/DOF_Tipo_Combustible';
 import { DOF_Estacion } from '@/lib/server/models/DOF_Estacion';
 import { DOF_Acuerdos } from '@/lib/server/models/DOF_Acuerdos';
+import { DOF_Parametros } from '@/lib/server/models/DOF_Parametros';
 
 const RegistroSchema = z.object({
   Fecha: z.preprocess((v) => (v instanceof Date ? v : new Date(String(v))), z.date()),
@@ -29,7 +30,13 @@ export type ImportXlsxResult = {
 };
 
 
-
+export async function getAcuerdos() {
+  await ensureDB();
+  getDB();
+  const rows = await DOF_Acuerdos.findAll({ order: [["id", "ASC"]] });
+  return rows.map(r => r.toJSON());
+}
+  
 const toDate = z.preprocess((v) => {
   if (v == null || v === '') return null;
   if (v instanceof Date) return v;
@@ -517,45 +524,48 @@ const AcuerdoCreate = z.object({
 });
 export type AcuerdoCreate = z.infer<typeof AcuerdoCreate>;
 
-export async function listAcuerdos(params: {
-  q?: string | null;
-  status?: unknown;
-  desde?: string | null; // 'YYYY-MM-DD'
-  hasta?: string | null; // 'YYYY-MM-DD'
-} = {}) {
-  await ensureDB();
 
-  const where: any = {};
-
-  // status
-  const s = parseOptionalIntLoose(params.status);
-  if (s !== null) where.Status = s;
-
-  // q por NombreAcuerdo
-  if (params.q && String(params.q).trim() !== '') {
-    where.NombreAcuerdo = { [Op.like]: `%${String(params.q).trim()}%` };
-  }
-
-  // desde / hasta
-  if (params.desde) {
-    where.FechaInicial = { [Op.gte]: params.desde };
-  }
-  if (params.hasta) {
-    where.FechaFinal = where.FechaFinal || {};
-    where.FechaFinal[Op.lte] = params.hasta;
-  }
-
-  const rows = await DOF_Acuerdos.findAll({
-    where,
-    order: [['FechaInicial', 'DESC']],
-  });
-
-  return rows.map(r => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
-}
 
 export async function createAcuerdo(input: unknown) {
   await ensureDB();
   const data = AcuerdoCreate.parse(input);
   const created = await DOF_Acuerdos.create(data as any);
+  return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
+}
+/* ============================================
+ *  PARTE 7: PARAMETROS (GET/POST)
+ *  (migración de tus endpoints al servicio)
+ * ============================================ */
+
+
+const ParametroCreate = z.object({
+  Nombre: z.string().min(1, 'Nombre requerido').transform(s => s.trim()),
+  Status: z.number().int().optional(), // tu BD tiene default=1
+});
+export type ParametroCreate = z.infer<typeof ParametroCreate>;
+
+export async function listParametros(params: { q?: string | null; status?: unknown } = {}) {
+  await ensureDB();
+
+  const where: any = {};
+  const s = parseOptionalIntLoose(params.status);
+  if (s !== null) where.Status = s;
+  if (params.q && String(params.q).trim() !== '') {
+    where.Nombre = { [Op.like]: `%${String(params.q).trim()}%` };
+  }
+
+  const rows = await DOF_Parametros.findAll({
+    where,
+    attributes: ['id', 'Nombre'],
+    order: [['id', 'ASC']],
+  });
+
+  return rows.map(r => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+export async function createParametro(input: unknown) {
+  await ensureDB();
+  const data = ParametroCreate.parse(input);
+  const created = await DOF_Parametros.create(data as any);
   return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
 }

@@ -1,6 +1,4 @@
-import { getAcuerdos } from "@/lib/server/services/acuerdos";
-import { getReporteSemanal } from "@/lib/server/services/dof";
-import { listTiposCombustible,listClientes,listEstaciones } from "@/lib/server/services/dof";
+import { getReporteSemanal,getAcuerdos,listTiposCombustible,listClientes,listEstaciones } from "@/lib/server/services/dof";
 
 /**
 // Se pueden combinar los filtro
@@ -66,11 +64,12 @@ await getReporteSemanal({ idCliente: 123, idEstacion: 45 });
         </div>
 
                 <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
-          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">📘 Clientes</h2>
+          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white">xx Estaciones</h2>
           <pre className="overflow-x-auto text-sm text-zinc-800 dark:text-zinc-200">
             {JSON.stringify(Estaciones, null, 2)}
           </pre>
         </div>
+
 
       </div>
     </div>
