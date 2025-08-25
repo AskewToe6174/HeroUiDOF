@@ -1,12 +1,19 @@
+// /app/(dof)/registros/actions.ts
 'use server';
 
-import { importRegistrosXlsx, type ImportXlsxResult } from '@/lib/server/services/dof';
 import { revalidatePath } from 'next/cache';
+import {
+  importRegistrosXlsx,
+  type ImportXlsxResult,
+  createTipoCombustible,
+  createCliente,createEstacion
+} from '@/lib/server/services/dof';
 
 export type ImportState =
   | { ok: true; result: ImportXlsxResult }
   | { ok: false; error: string };
 
+/* ========== Importar XLSX ========== */
 export async function importarRegistrosAction(
   _prev: ImportState | undefined,
   formData: FormData
@@ -18,16 +25,45 @@ export async function importarRegistrosAction(
     const idCliente = Number(formData.get('IdCliente') ?? '');
     const dryRun = String(formData.get('dryRun') ?? 'false').toLowerCase() === 'true';
 
-    // Importante: convertir File (Web) a Buffer (Node) para tu parseador/Sequelize
     const buffer = Buffer.from(await file.arrayBuffer());
-
     const result = await importRegistrosXlsx({ buffer, idCliente, dryRun });
 
-    // Si tienes una vista que lista registros, revalídala:
-    // revalidatePath('/(dof)/registros');
-
+    // revalidatePath('/(dof)/registros'); // si quieres refrescar la página
     return { ok: true, result };
   } catch (e: any) {
     return { ok: false, error: e?.message ?? 'Error al importar' };
   }
+}
+
+/* ========== Crear Tipo de Combustible ========== */
+export async function crearTipoCombustibleAction(formData: FormData) {
+  const Nombre = String(formData.get('Nombre') ?? '').trim();
+  const StatusStr = formData.get('Status');
+  const Status = StatusStr ? Number(StatusStr) : undefined;
+
+  const created = await createTipoCombustible({ Nombre, Status });
+  revalidatePath('/(dof)/registros'); // ajusta a tu ruta
+  return created;
+}
+
+/* ========== Crear Cliente ========== */
+export async function crearClienteAction(formData: FormData) {
+  const Nombre = String(formData.get('Nombre') ?? '').trim();
+  const label = formData.get('label') ? String(formData.get('label')) : null;
+  const lavel = formData.get('lavel') ? String(formData.get('lavel')) : null;
+  const StatusStr = formData.get('Status');
+  const Status = StatusStr ? Number(StatusStr) : undefined;
+
+  const created = await createCliente({ Nombre, label, lavel, Status });
+  return created;
+}
+
+
+export async function crearEstacionAction(formData: FormData) {
+  const Numero = String(formData.get('Numero') ?? '').trim();
+  const StatusStr = formData.get('Status');
+  const Status = StatusStr ? Number(StatusStr) : undefined;
+
+  const created = await createEstacion({ Numero, Status });
+  return created;
 }

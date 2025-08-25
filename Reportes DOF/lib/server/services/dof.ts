@@ -3,13 +3,13 @@ import 'server-only';
 import { z } from 'zod';
 import * as XLSX from 'xlsx';
 import { ensureDB, getDB } from "@/lib/server/ensureDB";
-import { QueryTypes } from "sequelize";
+import { Op, QueryTypes } from "sequelize";
 import { DOF_Cliente } from '@/lib/server/models/DOF_Cliente';
 import { DOF_RegistroPunto18 } from '@/lib/server/models/DOF_RegistroPunto18';
+import { DOF_Tipo_Combustible } from '@/lib/server/models/DOF_Tipo_Combustible';
+import { DOF_Estacion } from '@/lib/server/models/DOF_Estacion';
+import { DOF_Acuerdos } from '@/lib/server/models/DOF_Acuerdos';
 
-/* ============================================
- *  SCHEMA y tipos
- * ============================================ */
 const RegistroSchema = z.object({
   Fecha: z.preprocess((v) => (v instanceof Date ? v : new Date(String(v))), z.date()),
   IdCliente: z.number().int().positive(),
@@ -28,21 +28,23 @@ export type ImportXlsxResult = {
   sample: any[];
 };
 
-/* ============================================
- *  PARSER ROBUSTO para plantilla "ESTACIÓN N"
- *  (3 columnas de Volumen por estación, con merges)
- * ============================================ */
 
-// Config plantilla
-const COLS_PER_STATION = 3;                 // 3 columnas por estación: Magna, Premium, Diésel
-// IDs REALES de tu catálogo para (Magna, Premium, Diésel) en ese orden:
-const FUEL_ORDER: number[] = [1, 2, 3];     // <-- ajusta si difiere en tu BD
-// Si el "N" en "ESTACIÓN N" NO es el id real, mapea aquí:
+
+const toDate = z.preprocess((v) => {
+  if (v == null || v === '') return null;
+  if (v instanceof Date) return v;
+  const s = String(v).trim();
+  // Acepta 'YYYY-MM-DD' o cualquier cosa que new Date entienda
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00') : new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}, z.date().nullable());
+
+const COLS_PER_STATION = 3;                 
+
+const FUEL_ORDER: number[] = [1, 2, 3];   
 const STATION_MAP: Record<number, number> = {
-  // 1: 101, 2: 205, ...
 };
 
-// Helpers
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 function parseNumber2(v: any): number | null {
@@ -76,11 +78,7 @@ function toYMD(val: any): string | null {
   return null;
 }
 
-/**
- * Parser para plantilla con "ESTACIÓN N" y columnas "Volumen de ventas (Lts)".
- * - Soporta celdas combinadas en la fila de estaciones.
- * - Detecta bloques de 3 columnas por estación y asigna combustible por posición (FUEL_ORDER).
- */
+
 function parseTemplateToRows(buffer: Buffer, idCliente: number): RegistroInput[] {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheetName = wb.SheetNames[0];
@@ -180,9 +178,7 @@ function parseTemplateToRows(buffer: Buffer, idCliente: number): RegistroInput[]
   return out;
 }
 
-/* ============================================
- *  IMPORTACIÓN desde XLSX (Server-side)
- * ============================================ */
+
 export async function importRegistrosXlsx(opts: {
   buffer: Buffer;
   idCliente: number;
@@ -229,9 +225,6 @@ export async function importRegistrosXlsx(opts: {
   }
 }
 
-/* ============================================
- *  PARTE 2: REPORTE SEMANAL (raw SQL)
- * ============================================ */
 export type ReporteSemanalParams = {
   mes?: number | null;
   ano?: number | null;
@@ -382,4 +375,187 @@ export async function getReporteSemanal(params: ReporteSemanalParams) {
   });
 
   return rows as any[];
+}
+
+
+const parseOptionalIntLoose = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+
+export async function listTiposCombustible(params: { q?: string | null; status?: unknown } = {}) {
+  await ensureDB();
+
+  const where: any = {};
+  const s = parseOptionalIntLoose(params.status);
+  if (s !== null) where.Status = s;
+  if (params.q && String(params.q).trim() !== '') {
+    where.Nombre = { [Op.like]: `%${String(params.q).trim()}%` };
+  }
+
+  const rows = await DOF_Tipo_Combustible.findAll({
+    where,
+    attributes: ['id', 'Nombre'],
+    order: [['Nombre', 'ASC']],
+  });
+
+  return rows.map(r => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+const TipoCombustibleCreate = z.object({
+  Nombre: z.string().min(1, 'Nombre requerido'),
+  Status: z.number().int().optional(), // si tu modelo lo maneja; default en BD si aplica
+});
+export type TipoCombustibleCreate = z.infer<typeof TipoCombustibleCreate>;
+
+export async function createTipoCombustible(input: unknown) {
+  await ensureDB();
+  const data = TipoCombustibleCreate.parse(input);
+  const created = await DOF_Tipo_Combustible.create(data as any);
+  return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
+}
+
+/* ============================================
+ *  PARTE 4: CLIENTES (GET/POST)
+ *  (migración de tus endpoints al servicio)
+ * ============================================ */
+
+const ClienteCreate = z.object({
+  Nombre: z.string().min(1, 'Nombre requerido').transform(s => s.trim()),
+  label: z.string().trim().optional().nullable(),
+  lavel: z.string().trim().optional().nullable(),
+  Status: z.number().int().optional(), // deja que tu BD ponga default=1 si no lo envías
+});
+export type ClienteCreate = z.infer<typeof ClienteCreate>;
+
+
+export async function listClientes(params: { q?: string | null; status?: unknown } = {}) {
+  await ensureDB();
+
+  const where: any = {};
+  const s = parseOptionalIntLoose(params.status);
+  if (s !== null) where.Status = s;
+  if (params.q && String(params.q).trim() !== '') {
+    where.Nombre = { [Op.like]: `%${String(params.q).trim()}%` };
+  }
+
+  const rows = await DOF_Cliente.findAll({
+    where,
+    attributes: ['id', 'Nombre'],
+    order: [['Nombre', 'ASC']],
+  });
+
+  return rows.map(r => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+export async function createCliente(input: unknown) {
+  await ensureDB();
+  const data = ClienteCreate.parse(input);
+  const created = await DOF_Cliente.create(data as any);
+  return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
+}
+
+
+
+/* ============================================
+ *  PARTE 5: Estaciones (GET/POST)
+ *  (migración de tus endpoints al servicio)
+ * ============================================ */
+
+
+const EstacionCreate = z.object({
+  // Acepta número o string y lo normaliza a string
+  Numero: z.union([z.string(), z.number()])
+    .transform(v => String(v).trim())
+    .refine(v => v.length > 0, 'Numero requerido'),
+  Status: z.number().int().optional(), // deja default en BD si no envías
+});
+export type EstacionCreate = z.infer<typeof EstacionCreate>;
+
+
+export async function listEstaciones(params: { q?: string | null; status?: unknown } = {}) {
+  await ensureDB();
+
+  const where: any = {};
+  const s = parseOptionalIntLoose(params.status);
+  if (s !== null) where.Status = s;
+  if (params.q && String(params.q).trim() !== '') {
+    where.Numero = { [Op.like]: `%${String(params.q).trim()}%` };
+  }
+
+  const rows = await DOF_Estacion.findAll({
+    attributes: ['id', 'Numero'],
+    where,
+    order: [['id', 'ASC']],
+  });
+
+  return rows.map(r => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+export async function createEstacion(input: unknown) {
+  await ensureDB();
+  const data = EstacionCreate.parse(input);
+  const created = await DOF_Estacion.create(data as any);
+  return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
+}
+
+
+/* ============================================
+ *  PARTE 6: ACUERDOS (GET/POST)
+ *  (migración de tus endpoints al servicio)
+ * ============================================ */
+
+
+
+const AcuerdoCreate = z.object({
+  NombreAcuerdo: z.string().min(1, 'NombreAcuerdo requerido').transform(s => s.trim()),
+  FechaInicial: toDate.refine((d) => d !== null, 'FechaInicial requerida'),
+  FechaFinal: toDate.optional(), // puede ser null (acuerdo abierto)
+  Status: z.number().int().optional(), // deja default en BD si no se envía
+});
+export type AcuerdoCreate = z.infer<typeof AcuerdoCreate>;
+
+export async function listAcuerdos(params: {
+  q?: string | null;
+  status?: unknown;
+  desde?: string | null; // 'YYYY-MM-DD'
+  hasta?: string | null; // 'YYYY-MM-DD'
+} = {}) {
+  await ensureDB();
+
+  const where: any = {};
+
+  // status
+  const s = parseOptionalIntLoose(params.status);
+  if (s !== null) where.Status = s;
+
+  // q por NombreAcuerdo
+  if (params.q && String(params.q).trim() !== '') {
+    where.NombreAcuerdo = { [Op.like]: `%${String(params.q).trim()}%` };
+  }
+
+  // desde / hasta
+  if (params.desde) {
+    where.FechaInicial = { [Op.gte]: params.desde };
+  }
+  if (params.hasta) {
+    where.FechaFinal = where.FechaFinal || {};
+    where.FechaFinal[Op.lte] = params.hasta;
+  }
+
+  const rows = await DOF_Acuerdos.findAll({
+    where,
+    order: [['FechaInicial', 'DESC']],
+  });
+
+  return rows.map(r => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+export async function createAcuerdo(input: unknown) {
+  await ensureDB();
+  const data = AcuerdoCreate.parse(input);
+  const created = await DOF_Acuerdos.create(data as any);
+  return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
 }

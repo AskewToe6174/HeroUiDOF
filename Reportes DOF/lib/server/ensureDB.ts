@@ -14,6 +14,6 @@ export function getDB() {
 }
 
 export async function ensureDB() {
-  // Solo autentica; usa migraciones en prod (no sync aquí).
-  await sequelize.authenticate();
+ getDB();  
+   await sequelize.authenticate();
 }
