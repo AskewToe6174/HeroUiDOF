@@ -1,4 +1,4 @@
-import { getReporteSemanal, getAcuerdos, listTiposCombustible, listClientes, listEstaciones, listParametros } from "@/lib/server/services/dof";
+import { getReporteSemanal, getAcuerdos, listTiposCombustible, listClientes, listEstaciones, listParametros, listConstantes } from "@/lib/server/services/dof";
 
 /**
 // Se pueden combinar los filtro
@@ -22,6 +22,7 @@ await getReporteSemanal({ idCliente: 123, idEstacion: 45 });
   });
   const Estaciones = await listEstaciones();
   const Parametros = await listParametros();
+  const Constantes = await listConstantes();
 
 
   return (
@@ -78,6 +79,17 @@ await getReporteSemanal({ idCliente: 123, idEstacion: 45 });
             {JSON.stringify(Parametros, null, 2)}
           </pre>
         </div>
+
+
+        <div className="bg-white dark:bg-zinc-900 rounded-md shadow p-4">
+          <h2 className="text-lg font-semibold mb-2 text-zinc-800 dark:text-white"> 📝 Constantes</h2>
+          <pre className="overflow-x-auto text-sm text-zinc-800 dark:text-zinc-200">
+            {JSON.stringify(Constantes, null, 2)}
+          </pre>
+        </div>
+
+
+
 
       </div>
     </div>

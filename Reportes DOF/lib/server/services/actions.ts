@@ -6,7 +6,7 @@ import {
   importRegistrosXlsx,
   type ImportXlsxResult,
   createTipoCombustible,
-  createCliente, createEstacion, createAcuerdo, createParametro
+  createCliente, createEstacion, createAcuerdo, createParametro,createConstante
 } from '@/lib/server/services/dof';
 
 export type ImportState =
@@ -88,5 +88,31 @@ export async function crearParametroAction(formData: FormData) {
   const Status = StatusStr ? Number(StatusStr) : undefined;
 
   const created = await createParametro({ Nombre, Status });
+  return created;
+}
+
+
+
+
+export async function crearConstanteAction(formData: FormData) {
+  const Nombre = String(formData.get('Nombre') ?? '').trim();
+  const Valor = String(formData.get('Valor') ?? '').trim(); // admite "6,455500" o "6.455500" (el servicio normaliza)
+  const IdTipoCombustibleStr = formData.get('IdTipoCombustible');
+  const IdTipoCombustible =
+    IdTipoCombustibleStr && String(IdTipoCombustibleStr).trim() !== ''
+      ? Number(IdTipoCombustibleStr)
+      : undefined;
+
+  const StatusStr = formData.get('Status');
+  const Status = StatusStr ? Number(StatusStr) : undefined;
+
+  const label = formData.get('label') ? String(formData.get('label')) : null;
+  const lavel = formData.get('lavel') ? String(formData.get('lavel')) : null;
+
+  const created = await createConstante({ Nombre, Valor, IdTipoCombustible, Status, label, lavel });
+
+  // Revalida donde listes las constantes (ajusta la ruta si usas otra)
+  revalidatePath('/(dof)/registros');
+
   return created;
 }

@@ -4,6 +4,7 @@ import FormCrearCliente from "@/components/FormClientes";
 import FormCrearEstacion from "@/components/FormEstacion";
 import FormCrearAcuerdo from "@/components/form-acuerdo";
 import FormCrearParametro from "@/components/Form-parametro";
+import FormCrearConstante from "@/components/FormConstante";
 
 export default function Page() {
   return (
@@ -20,8 +21,9 @@ export default function Page() {
       <FormCrearAcuerdo />
       <h1 className="text-xl font-semibold">Crear Parametro</h1>
       <FormCrearParametro />
+      <h1 className="text-xl font-semibold">Crear Constante</h1>
+      <FormCrearConstante />
 
-      
     </main>
   );
 }

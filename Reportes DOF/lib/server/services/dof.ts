@@ -10,6 +10,7 @@ import { DOF_Tipo_Combustible } from '@/lib/server/models/DOF_Tipo_Combustible';
 import { DOF_Estacion } from '@/lib/server/models/DOF_Estacion';
 import { DOF_Acuerdos } from '@/lib/server/models/DOF_Acuerdos';
 import { DOF_Parametros } from '@/lib/server/models/DOF_Parametros';
+import { DOF_CONSTANTE } from '@/lib/server/models/DOF_CONSTANTE';
 
 const RegistroSchema = z.object({
   Fecha: z.preprocess((v) => (v instanceof Date ? v : new Date(String(v))), z.date()),
@@ -567,5 +568,63 @@ export async function createParametro(input: unknown) {
   await ensureDB();
   const data = ParametroCreate.parse(input);
   const created = await DOF_Parametros.create(data as any);
+  return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
+}
+
+
+/* ============================================
+ *  PARTE 8: CONSTANTES (GET/POST)
+ *  (migración de tus endpoints al servicio)
+ * ============================================ */
+
+const ConstanteCreate = z.object({
+  Nombre: z.string().min(1, 'Nombre requerido').transform(s => s.trim()),
+  // Acepta número o string y lo guarda como string normalizado (punto decimal)
+  Valor: z.union([z.string(), z.number()]).transform((v) => {
+    const s = String(v).trim();
+    return s.replace(',', '.');
+  }),
+  IdTipoCombustible: z
+    .union([z.string(), z.number(), z.null(), z.undefined()])
+    .transform((v) => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = Number(v);
+      if (!Number.isFinite(n)) throw new Error('IdTipoCombustible inválido');
+      return n;
+    })
+    .nullable()
+    .optional(),
+  Status: z.number().int().optional(), // tu BD tiene default=1
+  label: z.string().optional().nullable(),
+  lavel: z.string().optional().nullable(),
+});
+export type ConstanteCreate = z.infer<typeof ConstanteCreate>;
+
+export async function listConstantes(params: {
+  q?: string | null;
+  IdTipoCombustible?: unknown;
+} = {}) {
+  await ensureDB();
+
+  const where: any = {};
+  if (params.q && String(params.q).trim() !== '') {
+    where.Nombre = { [Op.like]: `%${String(params.q).trim()}%` };
+  }
+  const itc = parseOptionalIntLoose(params.IdTipoCombustible);
+  if (itc !== null) where.IdTipoCombustible = itc;
+
+  const rows = await DOF_CONSTANTE.findAll({
+    where,
+    order: [['Nombre', 'ASC']],
+    attributes: ['id', 'Nombre', 'Valor','IdTipoCombustible'],
+  });
+
+  return rows.map((r) => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+export async function createConstante(input: unknown) {
+  await ensureDB();
+  const data = ConstanteCreate.parse(input);
+  const created = await DOF_CONSTANTE.create(data as any);
   return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
 }
