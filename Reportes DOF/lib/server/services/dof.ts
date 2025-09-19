@@ -11,6 +11,7 @@ import { DOF_Estacion } from '@/lib/server/models/DOF_Estacion';
 import { DOF_Acuerdos } from '@/lib/server/models/DOF_Acuerdos';
 import { DOF_Parametros } from '@/lib/server/models/DOF_Parametros';
 import { DOF_CONSTANTE } from '@/lib/server/models/DOF_CONSTANTE';
+import { DOF_Detalle } from '@/lib/server/models/DOF_Detalle';
 
 const RegistroSchema = z.object({
   Fecha: z.preprocess((v) => (v instanceof Date ? v : new Date(String(v))), z.date()),
@@ -233,7 +234,21 @@ export async function importRegistrosXlsx(opts: {
   }
 }
 
+export type ReporteAnualParams = {
+  ano?: number | null;
+  idCliente?: number | null;
+  idEstacion?: number | null;
+};
+
 export type ReporteSemanalParams = {
+  mes?: number | null;
+  ano?: number | null;
+  idCliente?: number | null;
+  idEstacion?: number | null;
+};
+
+
+export type ReporteMensualParams = {
   mes?: number | null;
   ano?: number | null;
   idCliente?: number | null;
@@ -260,6 +275,32 @@ function validarParams({ mes, ano, idCliente, idEstacion }: ReporteSemanalParams
     throw new Error("idEstacion inválido");
   }
 }
+function validarParamsAnual({ ano, idCliente, idEstacion }: ReporteAnualParams) {
+  if (ano !== null && ano !== undefined && (!Number.isInteger(ano) || ano < 1900 || ano > 9999)) {
+    throw new Error("ano inválido");
+  }
+  if (idCliente !== null && idCliente !== undefined && !Number.isFinite(idCliente)) {
+    throw new Error("idCliente inválido");
+  }
+  if (idEstacion !== null && idEstacion !== undefined && !Number.isFinite(idEstacion)) {
+    throw new Error("idEstacion inválido");
+  }
+}
+
+
+function validarParams2({ mes, ano, idCliente, idEstacion }: ReporteMensualParams) {
+  if (mes !== null && mes !== undefined && (!Number.isInteger(mes) || mes < 1 || mes > 12)) {
+    throw new Error("mes debe ser 1..12");
+  }
+  if (ano !== null && ano !== undefined && (!Number.isInteger(ano) || ano < 1900 || ano > 9999)) {
+    throw new Error("ano inválido");
+  }
+  if (idCliente !== null && idCliente !== undefined && !Number.isFinite(idCliente)) {
+    throw new Error("idCliente inválido");
+  }
+  if (idEstacion !== null && idEstacion !== undefined && !Number.isFinite(idEstacion)) {
+    throw new Error("idEstacion inválido");
+  }}
 
 export async function getReporteSemanal(params: ReporteSemanalParams) {
   await ensureDB();
@@ -375,6 +416,204 @@ export async function getReporteSemanal(params: ReporteSemanalParams) {
     replacements: {
       mes: params.mes ?? null,
       ano: params.ano ?? null,
+      idCliente: params.idCliente ?? null,
+      idEstacion: params.idEstacion ?? null,
+    },
+    type: QueryTypes.SELECT,
+    raw: true as any,
+  });
+
+  return rows as any[];
+}
+
+
+export async function getReporteMensual(params: ReporteMensualParams) {
+  await ensureDB();
+  const sequelize = getDB();
+
+  validarParams2(params);
+
+  const sql = `
+SELECT
+  YEAR(d.Fecha)  AS anio,
+  MONTH(d.Fecha) AS mes,
+  d.idTipoCombustible,
+  ROUND(SUM(d.litros_dia), 6)                                             AS LITROS,
+  ROUND(SUM(d.litros_dia * IFNULL(k.constante_xlt, 0)), 2)                AS ESTIMULO_DECRETO_2017,
+  ROUND(SUM(d.litros_dia * IFNULL(p.monto_estimulo_xlt, 0)), 2)           AS ESTIMULO_ACUERDOS,
+  ROUND(SUM(d.litros_dia * IFNULL(p.cuota_periodo_xlt, 0)), 2)            AS COMPLEMENTO
+FROM (
+  -- Agregado DIARIO dentro de la vigencia del acuerdo
+  SELECT
+    a.id                                AS idAcuerdo,
+    a.NombreAcuerdo,
+    a.FechaInicial,
+    COALESCE(a.FechaFinal,'9999-12-31') AS FechaFinal,
+    r.IdCliente,
+    r.idEstacion,
+    r.idTipoCombustible,
+    r.Fecha,
+    SUM(r.VolumenVentasLts)             AS litros_dia
+  FROM DOF_Acuerdos a
+  JOIN DOF_RegistroPunto18 r
+    ON r.Status = 1
+   AND r.Fecha BETWEEN a.FechaInicial AND COALESCE(a.FechaFinal,'9999-12-31')
+  WHERE a.Status = 1
+    AND (:idCliente  IS NULL OR r.IdCliente  = :idCliente)
+    AND (:idEstacion IS NULL OR r.idEstacion = :idEstacion)
+    AND (:ano IS NULL OR YEAR(r.Fecha) = :ano)
+    AND (:mes IS NULL OR MONTH(r.Fecha) = :mes)
+  GROUP BY
+    a.id, a.NombreAcuerdo, a.FechaInicial, a.FechaFinal,
+    r.IdCliente, r.idEstacion, r.idTipoCombustible, r.Fecha
+) AS d
+LEFT JOIN (
+  -- Último valor por acuerdo/combustible: 2 (monto) y 4 (cuota)
+  SELECT
+    idAcuerdo,
+    IdTipoCombustible,
+    MAX(CASE WHEN idParametro = 2 THEN Valor END) AS monto_estimulo_xlt,
+    MAX(CASE WHEN idParametro = 4 THEN Valor END) AS cuota_periodo_xlt
+  FROM (
+    SELECT dd.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY dd.idAcuerdo, dd.IdTipoCombustible, dd.idParametro
+             ORDER BY dd.UpdateAt DESC, dd.id DESC
+           ) AS rn
+    FROM DOF_Detalle dd
+    WHERE dd.Status = 1
+      AND dd.idParametro IN (2,4)
+  ) t
+  WHERE rn = 1
+  GROUP BY idAcuerdo, IdTipoCombustible
+) AS p
+  ON p.idAcuerdo = d.idAcuerdo
+ AND p.IdTipoCombustible = d.idTipoCombustible
+LEFT JOIN (
+  -- Última constante por combustible
+  SELECT
+    IdTipoCombustible,
+    CAST(Valor AS DECIMAL(18,6)) AS constante_xlt
+  FROM (
+    SELECT c.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY c.IdTipoCombustible
+             ORDER BY c.UpdateAt DESC, c.ID DESC
+           ) AS rn
+    FROM DOF_CONSTANTE c
+    WHERE c.Status = 1
+  ) z
+  WHERE rn = 1
+) AS k
+  ON k.IdTipoCombustible = d.idTipoCombustible
+GROUP BY
+  YEAR(d.Fecha), MONTH(d.Fecha), d.idTipoCombustible
+ORDER BY
+  anio, mes, idTipoCombustible;
+  `;
+
+  const rows = await sequelize.sequelize.query(sql, {
+    replacements: {
+      mes: params.mes ?? null,
+      ano: params.ano ?? null,
+      idCliente: params.idCliente ?? null,
+      idEstacion: params.idEstacion ?? null,
+    },
+    type: QueryTypes.SELECT,
+    raw: true as any,
+  });
+
+  return rows as any[];
+}
+
+export async function getReporteAnual(params: ReporteAnualParams) {
+  await ensureDB();
+  const sequelize = getDB();
+
+  validarParamsAnual(params);
+
+  const sql = `
+SELECT
+  YEAR(d.Fecha)  AS anio,
+  d.idTipoCombustible,
+  ROUND(SUM(d.litros_dia), 6)                                   AS LITROS,
+  ROUND(SUM(d.litros_dia * IFNULL(k.constante_xlt, 0)), 2)      AS ESTIMULO_DECRETO_2017,
+  ROUND(SUM(d.litros_dia * IFNULL(p.monto_estimulo_xlt, 0)), 2)  AS ESTIMULO_ACUERDOS,
+  ROUND(SUM(d.litros_dia * IFNULL(p.cuota_periodo_xlt, 0)), 2)   AS COMPLEMENTO
+FROM (
+  -- Agregado DIARIO dentro de la vigencia del acuerdo
+  SELECT
+    a.id                                AS idAcuerdo,
+    a.NombreAcuerdo,
+    a.FechaInicial,
+    COALESCE(a.FechaFinal,'9999-12-31') AS FechaFinal,
+    r.IdCliente,
+    r.idEstacion,
+    r.idTipoCombustible,
+    r.Fecha,
+    SUM(r.VolumenVentasLts)             AS litros_dia
+  FROM DOF_Acuerdos a
+  JOIN DOF_RegistroPunto18 r
+    ON r.Status = 1
+   AND r.Fecha BETWEEN a.FechaInicial AND COALESCE(a.FechaFinal,'9999-12-31')
+  WHERE a.Status = 1
+    AND (:idCliente  IS NULL OR r.IdCliente  = :idCliente)
+    AND (:idEstacion IS NULL OR r.idEstacion = :idEstacion)
+    AND (:ano IS NULL OR r.Fecha >= :desde AND r.Fecha < :hasta)
+  GROUP BY
+    a.id, a.NombreAcuerdo, a.FechaInicial, a.FechaFinal,
+    r.IdCliente, r.idEstacion, r.idTipoCombustible, r.Fecha
+) AS d
+LEFT JOIN (
+  -- Último valor por acuerdo/combustible
+  SELECT
+    idAcuerdo,
+    IdTipoCombustible,
+    MAX(CASE WHEN idParametro = 2 THEN Valor END) AS monto_estimulo_xlt,
+    MAX(CASE WHEN idParametro = 4 THEN Valor END) AS cuota_periodo_xlt
+  FROM (
+    SELECT dd.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY dd.idAcuerdo, dd.IdTipoCombustible, dd.idParametro
+             ORDER BY dd.UpdateAt DESC, dd.id DESC
+           ) AS rn
+    FROM DOF_Detalle dd
+    WHERE dd.Status = 1
+      AND dd.idParametro IN (2,4)
+  ) t
+  WHERE rn = 1
+  GROUP BY idAcuerdo, IdTipoCombustible
+) AS p
+  ON p.idAcuerdo = d.idAcuerdo
+ AND p.IdTipoCombustible = d.idTipoCombustible
+LEFT JOIN (
+  -- Última constante por combustible
+  SELECT
+    IdTipoCombustible,
+    CAST(Valor AS DECIMAL(18,6)) AS constante_xlt
+  FROM (
+    SELECT c.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY c.IdTipoCombustible
+             ORDER BY c.UpdateAt DESC, c.ID DESC
+           ) AS rn
+    FROM DOF_CONSTANTE c
+    WHERE c.Status = 1
+  ) z
+  WHERE rn = 1
+) AS k
+  ON k.IdTipoCombustible = d.idTipoCombustible
+GROUP BY
+  YEAR(d.Fecha), d.idTipoCombustible
+ORDER BY
+  anio, idTipoCombustible;
+  `;
+
+  const rows = await sequelize.sequelize.query(sql, {
+    replacements: {
+      ano: params.ano ?? null,
+      desde: params.ano ? `${params.ano}-01-01` : null,
+      hasta: params.ano ? `${params.ano + 1}-01-01` : null,
       idCliente: params.idCliente ?? null,
       idEstacion: params.idEstacion ?? null,
     },
@@ -627,4 +866,101 @@ export async function createConstante(input: unknown) {
   const data = ConstanteCreate.parse(input);
   const created = await DOF_CONSTANTE.create(data as any);
   return typeof (created as any).toJSON === 'function' ? (created as any).toJSON() : created;
+}
+
+
+
+/* ============================================
+ *  PARTE 9: DETALLES (GET/POST)
+ *  (migración de tus endpoints al servicio)
+ * ============================================ */
+
+// Normaliza "6,455500" o "6.455500" a número con 6 decimales; o null si vacío
+function parseValor6(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const asNum = Number(String(v).replace(',', '.'));
+  if (!Number.isFinite(asNum)) throw new Error(`Valor inválido: ${v}`);
+  return Number(asNum.toFixed(6));
+}
+
+const DetalleBase = z.object({
+  idAcuerdo: z.union([z.string(), z.number()])
+    .transform((v) => Number(v))
+    .refine(Number.isFinite, 'idAcuerdo inválido'),
+  idParametro: z.union([z.string(), z.number()])
+    .transform((v) => Number(v))
+    .refine(Number.isFinite, 'idParametro inválido'),
+  IdTipoCombustible: z.union([z.string(), z.number()])
+    .transform((v) => Number(v))
+    .refine(Number.isFinite, 'IdTipoCombustible inválido'),
+  Valor: z.union([z.string(), z.number(), z.null(), z.undefined()])
+    .transform(parseValor6),
+  label: z.union([z.string(), z.null(), z.undefined()]).optional(),
+  lavel: z.union([z.string(), z.null(), z.undefined()]).optional(),
+  Status: z.union([z.number(), z.string(), z.undefined()])
+    .transform((v) => (v === undefined ? undefined : Number(v)))
+    .optional(),
+});
+export type DetalleItem = z.infer<typeof DetalleBase>;
+
+export async function listDetalles(params: {
+  idAcuerdo?: unknown;
+  idParametro?: unknown;
+  IdTipoCombustible?: unknown;
+} = {}) {
+  await ensureDB();
+
+  const where: any = {};
+  const a = parseOptionalIntLoose(params.idAcuerdo);
+  const p = parseOptionalIntLoose(params.idParametro);
+  const c = parseOptionalIntLoose(params.IdTipoCombustible);
+  if (a !== null) where.idAcuerdo = a;
+  if (p !== null) where.idParametro = p;
+  if (c !== null) where.IdTipoCombustible = c;
+
+  const rows = await DOF_Detalle.findAll({
+    where,
+    order: [
+      ['idAcuerdo', 'ASC'],
+      ['idParametro', 'ASC'],
+    ],
+    include: [
+      { model: DOF_Acuerdos },
+      { model: DOF_Parametros },
+      { model: DOF_Tipo_Combustible },
+    ],
+  });
+
+  return rows.map((r) => (typeof (r as any).toJSON === 'function' ? (r as any).toJSON() : r));
+}
+
+export async function upsertDetalles(input: unknown) {
+  await ensureDB();
+  const { sequelize } = getDB();
+  const t = await sequelize.transaction();
+  try {
+    if (Array.isArray(input)) {
+      const rows: DetalleItem[] = input.map((r) => DetalleBase.parse(r));
+      const createdOrUpdated = await DOF_Detalle.bulkCreate(rows as any[], {
+        updateOnDuplicate: ['Valor', 'label', 'lavel', 'Status', 'UpdateAt'],
+        transaction: t,
+      });
+      await t.commit();
+      return {
+        count: createdOrUpdated.length,
+        items: createdOrUpdated.map((r: any) =>
+          typeof r.toJSON === 'function' ? r.toJSON() : r
+        ),
+      };
+    } else {
+      const row: DetalleItem = DetalleBase.parse(input);
+      const [item, created] = await DOF_Detalle.upsert(row as any, { transaction: t });
+      await t.commit();
+      const json = typeof (item as any).toJSON === 'function' ? (item as any).toJSON() : item;
+      return { created, item: json };
+    }
+  } catch (e) {
+    await t.rollback();
+    throw e;
+  }
 }

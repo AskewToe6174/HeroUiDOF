@@ -6,7 +6,7 @@ import {
   importRegistrosXlsx,
   type ImportXlsxResult,
   createTipoCombustible,
-  createCliente, createEstacion, createAcuerdo, createParametro,createConstante
+  createCliente, createEstacion, createAcuerdo, createParametro,createConstante,upsertDetalles
 } from '@/lib/server/services/dof';
 
 export type ImportState =
@@ -112,7 +112,43 @@ export async function crearConstanteAction(formData: FormData) {
   const created = await createConstante({ Nombre, Valor, IdTipoCombustible, Status, label, lavel });
 
   // Revalida donde listes las constantes (ajusta la ruta si usas otra)
-  revalidatePath('/(dof)/registros');
 
   return created;
 }
+
+
+
+
+
+export type UpsertDetallesServiceResult =
+  | { count: number; items: any[] }        // masivo
+  | { created: boolean; item: any };       // individual
+// ...
+export type UpsertDetallesState =
+  | { ok: true; count: number; items: any[] }
+  | { ok: true; created: boolean; item: any }
+  | { ok: false; error: string };
+
+// ✅ firma compatible con useActionState(prevState, formData)
+export async function upsertDetallesAction(
+  _prev: UpsertDetallesState | null,
+  formData: FormData
+): Promise<UpsertDetallesState> {
+  try {
+    const payload = String(formData.get('payload') ?? '');
+    if (!payload) return { ok: false, error: 'No se envió payload.' };
+
+    const raw = JSON.parse(payload);
+    const result = await upsertDetalles(raw as any);
+
+    if (Array.isArray(raw)) {
+      return { ok: true, count: (result as any).count, items: (result as any).items };
+    } else {
+      return { ok: true, created: (result as any).created, item: (result as any).item };
+    }
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? 'Error al guardar detalles' };
+  }
+}
+
+
